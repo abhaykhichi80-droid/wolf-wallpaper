@@ -1,0 +1,114 @@
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort
+from werkzeug.utils import secure_filename
+import os
+
+APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+WALLPAPER_DIR = os.path.join(APP_ROOT, "static", "wallpapers")
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "mp4", "webm"}
+VIDEO_EXTENSIONS = {"mp4", "webm"}
+MAX_CONTENT_LENGTH = 200 * 1024 * 1024  # 200 MB
+
+app = Flask(__name__)
+app.config["WALLPAPER_DIR"] = WALLPAPER_DIR
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+app.secret_key = "change_this_to_a_random_secret_key"
+
+# ensure base folder exists
+os.makedirs(app.config["WALLPAPER_DIR"], exist_ok=True)
+
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def get_categories_and_images():
+    """
+    Returns a dict: { category: [filenames...] }
+    """
+    categories = {}
+    if not os.path.exists(app.config["WALLPAPER_DIR"]):
+        os.makedirs(app.config["WALLPAPER_DIR"], exist_ok=True)
+    for entry in sorted(os.listdir(app.config["WALLPAPER_DIR"])):
+        cat_path = os.path.join(app.config["WALLPAPER_DIR"], entry)
+        if os.path.isdir(cat_path):
+            items = [f for f in sorted(os.listdir(cat_path)) if allowed_file(f)]
+            if items:
+                categories[entry] = items
+    return categories
+
+def list_categories():
+    if not os.path.exists(app.config["WALLPAPER_DIR"]):
+        return []
+    return [d for d in sorted(os.listdir(app.config["WALLPAPER_DIR"])) if os.path.isdir(os.path.join(app.config["WALLPAPER_DIR"], d))]
+
+@app.route("/")
+def index():
+    categories = get_categories_and_images()
+    return render_template("index.html", categories=categories)
+
+@app.route("/upload", methods=["GET", "POST"])
+def upload():
+    if request.method == "POST":
+        if "wallpaper" not in request.files:
+            flash("No file part", "danger")
+            return redirect(request.url)
+        file = request.files["wallpaper"]
+        if file.filename == "":
+            flash("No selected file", "danger")
+            return redirect(request.url)
+
+        existing_cat = request.form.get("existing_category", "").strip()
+        new_cat = request.form.get("new_category", "").strip()
+        if new_cat:
+            category = new_cat
+        elif existing_cat:
+            category = existing_cat
+        else:
+            category = "uncategorized"
+
+        safe_category = secure_filename(category) or "uncategorized"
+        target_dir = os.path.join(app.config["WALLPAPER_DIR"], safe_category)
+        os.makedirs(target_dir, exist_ok=True)
+
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            base, ext = os.path.splitext(filename)
+            save_path = os.path.join(target_dir, filename)
+            counter = 1
+            while os.path.exists(save_path):
+                filename = f"{base}_{counter}{ext}"
+                save_path = os.path.join(target_dir, filename)
+                counter += 1
+
+            file.save(save_path)
+
+            # handle client-side thumbnail (if provided)
+            if "thumb" in request.files:
+                thumb_file = request.files["thumb"]
+                thumb_name = os.path.splitext(filename)[0] + "_thumb.jpg"
+                thumb_path = os.path.join(target_dir, thumb_name)
+                try:
+                    thumb_file.save(thumb_path)
+                except Exception as e:
+                    print("Thumb save error:", e)
+
+            flash(f"Uploaded {filename} to category '{safe_category}'", "success")
+            return redirect(url_for("index"))
+        else:
+            flash("File type not allowed. Allowed: " + ", ".join(ALLOWED_EXTENSIONS), "danger")
+            return redirect(request.url)
+
+    categories = list_categories()
+    return render_template("upload.html", categories=categories)
+
+@app.route("/download/<category>/<filename>")
+def download_file(category, filename):
+    safe_cat = secure_filename(category)
+    safe_name = secure_filename(filename)
+    file_path = os.path.join(app.config["WALLPAPER_DIR"], safe_cat, safe_name)
+    if not os.path.isfile(file_path):
+        return abort(404)
+    return send_file(file_path, as_attachment=True)
+
+if __name__ == "__main__":
+    # ensure default category
+    os.makedirs(os.path.join(app.config["WALLPAPER_DIR"], "anime"), exist_ok=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

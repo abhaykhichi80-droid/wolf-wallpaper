@@ -1,0 +1,154 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Upload - Wolf Wallpaper</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+  <div class="container py-4">
+    <h1>Upload Wallpaper (Image or Video)</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, msg in messages %}
+          <div class="alert alert-{{ category }}">{{ msg }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form id="uploadForm" method="post" enctype="multipart/form-data">
+      <div class="mb-3">
+        <label for="wallpaper" class="form-label">Choose file</label>
+        <input class="form-control" type="file" id="wallpaper" name="wallpaper" accept="image/*,video/*" required>
+      </div>
+
+      <div class="mb-3">
+        <label for="existing_category" class="form-label">Choose existing category</label>
+        <select class="form-select" id="existing_category" name="existing_category">
+          <option value="">-- select --</option>
+          {% for cat in categories %}
+            <option value="{{ cat }}">{{ cat }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label for="new_category" class="form-label">Or new category</label>
+        <input class="form-control" id="new_category" name="new_category" placeholder="e.g. anime">
+      </div>
+
+      <button id="submitBtn" type="submit" class="btn btn-success">Upload</button>
+      <a href="{{ url_for('index') }}" class="btn btn-secondary">Back</a>
+    </form>
+  </div>
+
+<script>
+const form = document.getElementById('uploadForm');
+const fileInput = document.getElementById('wallpaper');
+
+form.addEventListener('submit', async function(e){
+  e.preventDefault();
+  const file = fileInput.files[0];
+  if(!file){
+    alert('Select a file');
+    return;
+  }
+
+  const formData = new FormData();
+  // append category fields (existing/new)
+  const existing = document.getElementById('existing_category').value;
+  const newCat = document.getElementById('new_category').value;
+  formData.append('existing_category', existing);
+  formData.append('new_category', newCat);
+
+  // If file is image, append and submit
+  if(file.type.startsWith('image/')){
+    formData.append('wallpaper', file, file.name);
+    await sendForm(formData);
+    return;
+  }
+
+  // If file is video, create a thumbnail client-side
+  if(file.type.startsWith('video/')){
+    try{
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.src = URL.createObjectURL(file);
+
+      await new Promise((resolve, reject) => {
+        video.addEventListener('loadedmetadata', () => resolve());
+        video.addEventListener('error', (e) => reject(e));
+      });
+
+      let seekTime = 1;
+      if(video.duration && video.duration < 1) seekTime = 0;
+      if(video.duration && video.duration < 0.5) seekTime = 0;
+
+      await new Promise((resolve, reject) => {
+        const handler = function() {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth || 640;
+            canvas.height = video.videoHeight || 360;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            canvas.toBlob((blob) => {
+              if(blob){
+                formData.append('thumb', blob, 'thumb.jpg');
+                formData.append('wallpaper', file, file.name);
+                resolve();
+              } else {
+                reject('no blob');
+              }
+            }, 'image/jpeg', 0.85);
+          } catch(err) {
+            reject(err);
+          }
+        };
+        const seekAndDraw = () => {
+          video.currentTime = seekTime;
+          video.addEventListener('seeked', handler, {once:true});
+        };
+        seekAndDraw();
+        setTimeout(() => {
+          if(!video.seeking) handler();
+        }, 2000);
+      });
+
+      await sendForm(formData);
+
+    } catch(err){
+      console.error('Thumbnail creation failed:', err);
+      const fd = new FormData();
+      fd.append('wallpaper', file, file.name);
+      fd.append('existing_category', existing);
+      fd.append('new_category', newCat);
+      await sendForm(fd);
+    }
+    return;
+  }
+
+  alert('Unsupported file type');
+});
+
+async function sendForm(fd){
+  try{
+    const resp = await fetch(window.location.href, {
+      method: 'POST',
+      body: fd
+    });
+    if(resp.redirected){
+      window.location.href = resp.url;
+    } else {
+      window.location.reload();
+    }
+  } catch(err){
+    alert('Upload failed: ' + err);
+  }
+}
+</script>
+
+</body>
+</html>
